@@ -18,9 +18,17 @@ export const verifyToken = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { uid: decoded.uid };
+    console.log("Decoded Token:", decoded);
+    req.user = { uid: decoded.userId };
     next();
   } catch (error) {
-    res.status(401).json({ message: "Unauthorized" });
+    if (error.name === "TokenExpiredError") {
+      console.error("Token has expired");
+      return res.status(401).json({ message: "Token expired. Please log in again." });
+    } else {
+      console.error("Token verification failed:", error);
+      return res.status(401).json({ message: "Unauthorized" });
+    }
   }
 };
+

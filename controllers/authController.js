@@ -1,4 +1,4 @@
-import { auth, db } from "../db/firebase.js";
+import { db } from "../db/firebase.js";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 
@@ -8,80 +8,79 @@ const denylist = new Set(); // In-memory denylist for invalidated tokens
 
 // Signup Handler
 export const signup = async (req, res) => {
-  const { email, password, confirmPassword, profile } = req.body;
+  const { username, email, password } = req.body;
 
-  if (!email || !password || !confirmPassword || !profile || !profile.name || !profile.age) {
+  if (!username || !email || !password) {
     return res.status(400).json({ message: "All fields are required" });
   }
 
-  if (password !== confirmPassword) {
-    return res.status(400).json({ message: "Passwords do not match" });
-  }
-
   try {
-    const userRecord = await auth.createUser({ email, password });
+    const userRef = db.collection("users").where("email", "==", email);
+    const userSnapshot = await userRef.get();
 
-    await db.collection("users").doc(userRecord.uid).set({
+    if (!userSnapshot.empty) {
+      return res.status(400).json({ message: "Email already exists" });
+    }
+
+    const newUser = {
       email,
-      profile,
-    });
+      password,
+      username,
+    };
 
-    const token = jwt.sign({ uid: userRecord.uid }, process.env.JWT_SECRET);
+    const userDocRef = await db.collection("users").add(newUser);
+
+    const token = jwt.sign(
+      { userId: userDocRef.id },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_LIFETIME } // Set token lifetime
+    );
 
     res.status(201).json({ message: "User created successfully", token });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error("Error creating user:", error);
+    res.status(500).json({ message: error.message });
   }
 };
 
-// Login Handler (supports email/password and anonymous login)
+// Login Handler
 export const login = async (req, res) => {
-  const { email, password, isAnonymous } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  if (isAnonymous) {
-    try {
-      // Create an anonymous user
-      const userRecord = await auth.createUser({ displayName: "Anonymous" });
-
-      await db.collection("users").doc(userRecord.uid).set({
-        email: null,
-        profile: {
-          name: "Anonymous",
-          age: null,
-        },
-      });
-
-      const token = jwt.sign({ uid: userRecord.uid }, process.env.JWT_SECRET);
-
-      res.status(200).json({
-        message: "Anonymous login successful",
-        token,
-        uid: userRecord.uid,
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Anonymous login failed", error: error.message });
-    }
-  } else {
-    // Email/Password Login
     if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+      return res.status(400).send("Email and password are required");
     }
 
-    try {
-      const userRecord = await auth.getUserByEmail(email);
+    const userRef = db.collection("users").where("email", "==", email);
+    const userSnapshot = await userRef.get();
 
-      if (!userRecord) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
-      const token = jwt.sign({ uid: userRecord.uid }, process.env.JWT_SECRET);
-
-      res.status(200).json({ message: "Login successful", token });
-    } catch (error) {
-      res.status(401).json({ message: "Invalid credentials", error: error.message });
+    if (userSnapshot.empty) {
+      return res.status(400).send("User does not exist");
     }
+
+    const userDoc = userSnapshot.docs[0];
+
+    if (password !== userDoc.data().password) {
+      return res.status(400).send("Invalid credentials");
+    }
+
+    const user = userDoc.data();
+    user.password = undefined;
+
+    const token = jwt.sign(
+      { userId: userDoc.id },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_LIFETIME } // Set token lifetime
+    );
+
+    res.status(200).json({ message: "Login successful", token });
+  } catch (error) {
+    console.error("Error during login:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
+
 
 // Logout Handler
 export const logout = async (req, res) => {
@@ -99,50 +98,37 @@ export const logout = async (req, res) => {
   }
 };
 
-// Get Profile Handler
-export const getProfile = async (req, res) => {
-  const { uid } = req.user;
+// Change Password Handler with new password verification
+export const changePassword = async (req, res) => {
+  const { email, newPassword, verifyPassword } = req.body;
 
-  try {
-    const userDoc = await db.collection("users").doc(uid).get();
-
-    if (!userDoc.exists) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.status(200).json({ profile: userDoc.data().profile });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  if (!email || !newPassword || !verifyPassword) {
+    return res.status(400).json({ message: "Email, new password, and verify password are required" });
   }
-};
 
-// Update Profile Handler
-export const updateProfile = async (req, res) => {
-  const { uid } = req.user;
-  const { profile } = req.body;
-
-  if (!profile || !profile.name || !profile.age) {
-    return res.status(400).json({ message: "Profile information is required" });
+  if (newPassword !== verifyPassword) {
+    return res.status(400).json({ message: "New password and verify password do not match" });
   }
 
   try {
-    const userDoc = db.collection("users").doc(uid);
-    const docSnapshot = await userDoc.get();
+    const userRef = db.collection("users").where("email", "==", email);
+    const userSnapshot = await userRef.get();
 
-    if (!docSnapshot.exists) {
-      await userDoc.set({
-        email: req.user.email,
-        profile,
-      });
-      return res.status(201).json({ message: "Profile created successfully" });
+    if (userSnapshot.empty) {
+      return res.status(404).json({ message: "Email not found" });
     }
 
-    await userDoc.update({
-      profile,
+    const userDoc = userSnapshot.docs[0];
+    const userId = userDoc.id;
+
+    await db.collection("users").doc(userId).update({
+      password: newPassword,
     });
 
-    res.status(200).json({ message: "Profile updated successfully" });
+    res.status(200).json({ message: "Password updated successfully" });
+
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error("Error updating password:", error);
+    res.status(500).json({ message: "Error updating password", error: error.message });
   }
 };
