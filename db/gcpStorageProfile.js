@@ -21,3 +21,4 @@ const storage = new Storage({
 const bucket = storage.bucket(bucketName);
 
 export { storage, bucket };
+
