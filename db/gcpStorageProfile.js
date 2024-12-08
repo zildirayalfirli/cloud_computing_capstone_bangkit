@@ -4,20 +4,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const projectId = process.env.GCP_PROJECT_ID;
-const serviceAccountJson = process.env.GCP_KEY_FILE_PATH;
-const bucketName = process.env.GCP_BUCKET_NAME;
+const keyFilename = JSON.parse(process.env.GCP_KEY_FILE_PATH);
 
-if (!projectId || !serviceAccountJson || !bucketName) {
-  throw new Error("Missing GCP configuration. Check your environment variables.");
+if (!projectId || !keyFilename) {
+  console.error("Missing GCP configuration. Check .env file.");
+  process.exit(1);
 }
 
-const credentials = JSON.parse(serviceAccountJson);
+console.log("Using Project ID:", projectId);
+console.log("Using Key File:", keyFilename);
 
-const storage = new Storage({
-  projectId,
-  credentials,
-});
+const storage = new Storage({ projectId, keyFilename });
 
-const bucket = storage.bucket(bucketName);
+const bucket = storage.bucket(process.env.GCP_BUCKET_NAME);
+
+console.log("Bucket initialized:", bucket.name);
 
 export { storage, bucket };
